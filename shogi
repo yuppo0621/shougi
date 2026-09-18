@@ -1,0 +1,1108 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Web将棋 - オンライン＆AI対戦</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@400;700&display=swap');
+        
+        body {
+            font-family: 'Shippori Mincho', serif;
+            background-color: #f4e7d3; /* 和紙のような背景色 */
+            color: #2c2c2c;
+            touch-action: manipulation;
+        }
+
+        .board-grid {
+            display: grid;
+            grid-template-columns: repeat(9, 1fr);
+            grid-template-rows: repeat(9, 1fr);
+            width: 100%;
+            max-width: 450px;
+            aspect-ratio: 1 / 1;
+            border: 2px solid #5a3d2b;
+            background-color: #e5c07b; /* 将棋盤の色 */
+            box-shadow: 4px 4px 10px rgba(0,0,0,0.3);
+            margin: 0 auto;
+        }
+
+        .cell {
+            border: 1px solid #8c6b4a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: clamp(1rem, 5vw, 1.8rem);
+            font-weight: bold;
+            cursor: pointer;
+            position: relative;
+            user-select: none;
+        }
+
+        .cell.highlight {
+            background-color: rgba(76, 175, 80, 0.4); /* 移動可能ハイライト */
+        }
+
+        .cell.selected {
+            background-color: rgba(255, 235, 59, 0.6); /* 選択中ハイライト */
+        }
+
+        .cell.last-move {
+            background-color: rgba(255, 152, 0, 0.4); /* 最後の手ハイライト */
+        }
+
+        .piece {
+            width: 90%;
+            height: 90%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            line-height: 1;
+        }
+        
+        /* 相手の駒は逆さま */
+        .piece.opponent {
+            transform: rotate(180deg);
+        }
+
+        /* 成駒は赤色 */
+        .piece.promoted {
+            color: #d32f2f;
+        }
+
+        .hand-area {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            min-height: 40px;
+            padding: 8px;
+            background-color: rgba(255, 255, 255, 0.5);
+            border: 1px dashed #8c6b4a;
+            border-radius: 4px;
+            max-width: 450px;
+            margin: 0 auto;
+        }
+
+        .hand-piece {
+            border: 1px solid #8c6b4a;
+            background-color: #e5c07b;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 1.2rem;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            user-select: none;
+        }
+        
+        .hand-piece.selected {
+            background-color: rgba(255, 235, 59, 0.6);
+        }
+
+        .hand-piece.opponent {
+            transform: rotate(180deg);
+        }
+
+        .badge {
+            font-size: 0.8rem;
+            background: #d32f2f;
+            color: white;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-left: -5px;
+            margin-top: -10px;
+            z-index: 10;
+        }
+
+        #promotion-modal {
+            display: none;
+        }
+        #promotion-modal.active {
+            display: flex;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col p-4">
+
+    <header class="text-center mb-6">
+        <h1 class="text-3xl font-bold text-[#5a3d2b] drop-shadow-sm">Web将棋</h1>
+        <p class="text-sm text-gray-600 mt-1" id="status-text">モードを選択してください</p>
+    </header>
+
+    <!-- メニュー画面 -->
+    <div id="menu-screen" class="max-w-md w-full mx-auto bg-white/80 p-6 rounded-xl shadow-lg border border-[#8c6b4a]/30 space-y-6">
+        
+        <!-- 一人モード -->
+        <div class="space-y-3">
+            <h2 class="text-xl font-bold text-[#5a3d2b] border-b border-[#8c6b4a]/30 pb-2">一人で遊ぶ (CPU対戦)</h2>
+            <div class="grid grid-cols-2 gap-3">
+                <button onclick="startGame('cpu', 1)" class="bg-[#5a3d2b] text-white py-2 rounded shadow hover:bg-[#4a3223] transition">5級 (ランダム)</button>
+                <button onclick="startGame('cpu', 2)" class="bg-[#5a3d2b] text-white py-2 rounded shadow hover:bg-[#4a3223] transition">初段 (浅い読み)</button>
+                <button onclick="startGame('cpu', 3)" class="bg-[#5a3d2b] text-white py-2 rounded shadow hover:bg-[#4a3223] transition col-span-2">8段 (深い読み - 少し待ちます)</button>
+            </div>
+        </div>
+
+        <!-- オンラインモード -->
+        <div class="space-y-3">
+            <h2 class="text-xl font-bold text-[#5a3d2b] border-b border-[#8c6b4a]/30 pb-2">オンラインで遊ぶ</h2>
+            <div class="flex flex-col gap-3">
+                <button onclick="createRoom()" class="bg-blue-600 text-white py-2 rounded shadow hover:bg-blue-700 transition font-bold">部屋を作る</button>
+                <div class="flex gap-2">
+                    <input type="text" id="join-room-id" placeholder="部屋IDを入力" class="border border-gray-400 p-2 rounded flex-1 uppercase text-center font-mono">
+                    <button onclick="joinRoom()" class="bg-green-600 text-white px-4 py-2 rounded shadow hover:bg-green-700 transition font-bold">入る</button>
+                </div>
+            </div>
+            <p class="text-xs text-gray-500 text-center">※オンライン対戦は離れた人とも遊べます</p>
+        </div>
+    </div>
+
+    <!-- ゲーム画面 -->
+    <div id="game-screen" class="hidden flex-col items-center w-full max-w-lg mx-auto">
+        <!-- 部屋情報 -->
+        <div id="room-info" class="hidden w-full text-center bg-blue-100 border border-blue-300 text-blue-800 p-2 rounded mb-4 shadow-sm flex flex-col items-center">
+            <span class="text-sm">この部屋のID (相手に教えてください)</span>
+            <div class="flex items-center gap-2 mt-1">
+                <strong id="display-room-id" class="text-xl tracking-widest font-mono select-all"></strong>
+                <button onclick="copyRoomId()" class="text-xs bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600">コピー</button>
+            </div>
+            <p id="room-status-msg" class="text-xs mt-1 text-blue-600 font-bold">相手の参加を待っています...</p>
+        </div>
+
+        <!-- ボタン類 -->
+        <div class="w-full max-w-[450px] flex justify-between mb-2">
+            <button onclick="resetToMenu()" class="text-sm bg-gray-500 text-white px-3 py-1 rounded shadow hover:bg-gray-600 transition">← メニューへ</button>
+            <div id="turn-indicator" class="font-bold text-lg text-[#5a3d2b]"></div>
+        </div>
+
+        <!-- 後手（相手）の持ち駒 -->
+        <div class="w-full max-w-[450px] mb-1 text-sm text-gray-600 font-bold">相手の持ち駒</div>
+        <div id="hand-1" class="hand-area mb-4 justify-end"></div>
+
+        <!-- 将棋盤 -->
+        <div id="board" class="board-grid"></div>
+
+        <!-- 先手（自分）の持ち駒 -->
+        <div class="w-full max-w-[450px] mt-4 mb-1 text-sm text-gray-600 font-bold">あなたの持ち駒</div>
+        <div id="hand-0" class="hand-area mb-8"></div>
+    </div>
+
+    <!-- 成り選択モーダル -->
+    <div id="promotion-modal" class="fixed inset-0 bg-black/50 items-center justify-center z-50">
+        <div class="bg-white p-6 rounded-lg shadow-xl text-center space-y-4">
+            <h3 class="text-xl font-bold mb-4">成りますか？</h3>
+            <div class="flex justify-center gap-4">
+                <button id="btn-promote" class="bg-red-600 text-white px-6 py-3 rounded text-xl font-bold shadow hover:bg-red-700">成る</button>
+                <button id="btn-unpromote" class="bg-gray-500 text-white px-6 py-3 rounded text-xl font-bold shadow hover:bg-gray-600">成らない</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- メッセージモーダル (汎用) -->
+    <div id="msg-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
+        <div class="bg-white p-6 rounded-lg shadow-xl text-center max-w-sm w-full mx-4">
+            <h3 id="msg-title" class="text-xl font-bold mb-2"></h3>
+            <p id="msg-content" class="text-gray-700 mb-4"></p>
+            <button onclick="closeMsgModal()" class="bg-[#5a3d2b] text-white px-6 py-2 rounded shadow">閉じる</button>
+        </div>
+    </div>
+
+    <!-- Firebase Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // 将棋の基本データ構造とロジック
+        const TYPES = { EMPTY: '', PAWN: '歩', LANCE: '香', KNIGHT: '桂', SILVER: '銀', GOLD: '金', BISHOP: '角', ROOK: '飛', KING: '玉' };
+        const PROMOTED = { '歩': 'と', '香': '杏', '桂': '圭', '銀': '全', '角': '馬', '飛': '竜' };
+        const UNPROMOTED = Object.fromEntries(Object.entries(PROMOTED).map(([k, v]) => [v, k]));
+        
+        // 駒の価値（AI評価用）
+        const PIECE_VALUES = {
+            '歩': 100, '香': 300, '桂': 400, '銀': 500, '金': 600, '角': 800, '飛': 1000, '玉': 100000,
+            'と': 600, '杏': 600, '圭': 600, '全': 600, '馬': 1000, '竜': 1200
+        };
+
+        // 初期盤面 (9x9) 0: 先手(下), 1: 後手(上)
+        const INITIAL_BOARD = [
+            [{t: '香', o: 1}, {t: '桂', o: 1}, {t: '銀', o: 1}, {t: '金', o: 1}, {t: '玉', o: 1}, {t: '金', o: 1}, {t: '銀', o: 1}, {t: '桂', o: 1}, {t: '香', o: 1}],
+            [null, {t: '飛', o: 1}, null, null, null, null, null, {t: '角', o: 1}, null],
+            [{t: '歩', o: 1}, {t: '歩', o: 1}, {t: '歩', o: 1}, {t: '歩', o: 1}, {t: '歩', o: 1}, {t: '歩', o: 1}, {t: '歩', o: 1}, {t: '歩', o: 1}, {t: '歩', o: 1}],
+            [null, null, null, null, null, null, null, null, null],
+            [null, null, null, null, null, null, null, null, null],
+            [null, null, null, null, null, null, null, null, null],
+            [{t: '歩', o: 0}, {t: '歩', o: 0}, {t: '歩', o: 0}, {t: '歩', o: 0}, {t: '歩', o: 0}, {t: '歩', o: 0}, {t: '歩', o: 0}, {t: '歩', o: 0}, {t: '歩', o: 0}],
+            [null, {t: '角', o: 0}, null, null, null, null, null, {t: '飛', o: 0}, null],
+            [{t: '香', o: 0}, {t: '桂', o: 0}, {t: '銀', o: 0}, {t: '金', o: 0}, {t: '玉', o: 0}, {t: '金', o: 0}, {t: '銀', o: 0}, {t: '桂', o: 0}, {t: '香', o: 0}]
+        ];
+
+        class ShogiGame {
+            constructor() {
+                this.reset();
+            }
+
+            reset() {
+                // ディープコピー
+                this.board = JSON.parse(JSON.stringify(INITIAL_BOARD));
+                this.hands = [[], []]; // 0: 先手の持ち駒, 1: 後手の持ち駒 (文字列の配列)
+                this.turn = 0; // 0: 先手, 1: 後手
+                this.lastMove = null;
+                this.isFinished = false;
+                this.winner = null;
+            }
+
+            // 状態をロード（Firebase同期用）
+            loadState(state) {
+                if(!state) return;
+                this.board = state.board;
+                this.hands = state.hands;
+                this.turn = state.turn;
+                this.lastMove = state.lastMove;
+                this.isFinished = state.isFinished;
+                this.winner = state.winner;
+            }
+
+            // 状態をエクスポート
+            exportState() {
+                return {
+                    board: this.board,
+                    hands: this.hands,
+                    turn: this.turn,
+                    lastMove: this.lastMove,
+                    isFinished: this.isFinished,
+                    winner: this.winner
+                };
+            }
+
+            // 指定した駒の移動可能範囲を取得（盤上の駒）
+            getMovableSquares(r, c) {
+                const piece = this.board[r][c];
+                if (!piece) return [];
+                const moves = [];
+                const isOpponent = piece.o === 1;
+                const dir = isOpponent ? 1 : -1; // 進む方向 (後手は下へ+, 先手は上へ-)
+                const type = piece.t;
+
+                const addMove = (dr, dc, slide = false) => {
+                    let nr = r + dr, nc = c + dc;
+                    while (nr >= 0 && nr < 9 && nc >= 0 && nc < 9) {
+                        const target = this.board[nr][nc];
+                        if (!target) {
+                            moves.push({r: nr, c: nc});
+                        } else {
+                            if (target.o !== piece.o) moves.push({r: nr, c: nc}); // 敵駒なら取れる
+                            break; // 駒があればそれ以上進めない
+                        }
+                        if (!slide) break;
+                        nr += dr; nc += dc;
+                    }
+                };
+
+                // 金と成駒（と、杏、圭、全）の動き
+                const goldMoves = () => {
+                    addMove(dir, 0); addMove(dir, -1); addMove(dir, 1); // 前3方向
+                    addMove(0, -1); addMove(0, 1); // 横
+                    addMove(-dir, 0); // 後ろ
+                };
+
+                switch (type) {
+                    case '歩': addMove(dir, 0); break;
+                    case '香': addMove(dir, 0, true); break;
+                    case '桂': 
+                        addMove(dir * 2, -1); addMove(dir * 2, 1); break;
+                    case '銀': 
+                        addMove(dir, 0); addMove(dir, -1); addMove(dir, 1);
+                        addMove(-dir, -1); addMove(-dir, 1); break;
+                    case '金': case 'と': case '杏': case '圭': case '全':
+                        goldMoves(); break;
+                    case '角': 
+                        addMove(1, 1, true); addMove(1, -1, true); addMove(-1, 1, true); addMove(-1, -1, true); break;
+                    case '飛': 
+                        addMove(1, 0, true); addMove(-1, 0, true); addMove(0, 1, true); addMove(0, -1, true); break;
+                    case '馬':
+                        addMove(1, 1, true); addMove(1, -1, true); addMove(-1, 1, true); addMove(-1, -1, true);
+                        addMove(1, 0); addMove(-1, 0); addMove(0, 1); addMove(0, -1); break;
+                    case '竜':
+                        addMove(1, 0, true); addMove(-1, 0, true); addMove(0, 1, true); addMove(0, -1, true);
+                        addMove(1, 1); addMove(1, -1); addMove(-1, 1); addMove(-1, -1); break;
+                    case '玉':
+                        for(let dr=-1; dr<=1; dr++) for(let dc=-1; dc<=1; dc++) {
+                            if(dr!==0 || dc!==0) addMove(dr, dc);
+                        }
+                        break;
+                }
+                return moves;
+            }
+
+            // 持ち駒を打てる場所を取得
+            getDropSquares(pieceType, owner) {
+                const moves = [];
+                const dir = owner === 1 ? 1 : -1;
+                
+                // 二歩のチェック用（列ごとに歩があるか）
+                const hasPawnInCol = Array(9).fill(false);
+                if (pieceType === '歩') {
+                    for (let r = 0; r < 9; r++) {
+                        for (let c = 0; c < 9; c++) {
+                            if (this.board[r][c] && this.board[r][c].t === '歩' && this.board[r][c].o === owner) {
+                                hasPawnInCol[c] = true;
+                            }
+                        }
+                    }
+                }
+
+                for (let r = 0; r < 9; r++) {
+                    for (let c = 0; c < 9; c++) {
+                        if (!this.board[r][c]) {
+                            // 打ち歩詰めは複雑なので今回は簡易化（省略）
+                            // 行き所のない駒の制限
+                            if (owner === 0 && r === 0 && (pieceType === '歩' || pieceType === '香' || pieceType === '桂')) continue;
+                            if (owner === 0 && r === 1 && pieceType === '桂') continue;
+                            if (owner === 1 && r === 8 && (pieceType === '歩' || pieceType === '香' || pieceType === '桂')) continue;
+                            if (owner === 1 && r === 7 && pieceType === '桂') continue;
+                            
+                            // 二歩の制限
+                            if (pieceType === '歩' && hasPawnInCol[c]) continue;
+
+                            moves.push({r, c});
+                        }
+                    }
+                }
+                return moves;
+            }
+
+            // 指定した場所が敵陣かどうか
+            isEnemyCamp(r, owner) {
+                if (owner === 0) return r <= 2; // 先手は上3段
+                else return r >= 6; // 後手は下3段
+            }
+
+            // 成れるかどうかの判定
+            canPromote(type, fromR, toR, owner) {
+                if (!PROMOTED[type]) return false; // 成れない駒
+                return this.isEnemyCamp(fromR, owner) || this.isEnemyCamp(toR, owner);
+            }
+            
+            // 強制成りの判定（行き所がなくなる場合）
+            mustPromote(type, toR, owner) {
+                if (owner === 0) {
+                    if (toR === 0 && (type === '歩' || type === '香')) return true;
+                    if (toR <= 1 && type === '桂') return true;
+                } else {
+                    if (toR === 8 && (type === '歩' || type === '香')) return true;
+                    if (toR >= 7 && type === '桂') return true;
+                }
+                return false;
+            }
+
+            // 盤上の駒を動かす
+            move(fromR, fromC, toR, toC, promote = false) {
+                const piece = this.board[fromR][fromC];
+                if (!piece || piece.o !== this.turn) return false;
+
+                const targetPiece = this.board[toR][toC];
+                
+                // 駒を取る
+                if (targetPiece) {
+                    if (targetPiece.t === '玉') {
+                        this.isFinished = true;
+                        this.winner = this.turn;
+                    } else {
+                        // 取った駒を自分の持ち駒にする（成っていたら元に戻す）
+                        const originalType = UNPROMOTED[targetPiece.t] || targetPiece.t;
+                        this.hands[this.turn].push(originalType);
+                    }
+                }
+
+                // 移動
+                this.board[fromR][fromC] = null;
+                let newType = piece.t;
+                if (promote && PROMOTED[piece.t]) {
+                    newType = PROMOTED[piece.t];
+                }
+                this.board[toR][toC] = { t: newType, o: piece.o };
+
+                this.lastMove = { from: {r: fromR, c: fromC}, to: {r: toR, c: toC} };
+                this.changeTurn();
+                return true;
+            }
+
+            // 持ち駒を打つ
+            drop(type, toR, toC) {
+                if (this.board[toR][toC]) return false;
+                
+                const handIdx = this.hands[this.turn].indexOf(type);
+                if (handIdx === -1) return false;
+
+                this.hands[this.turn].splice(handIdx, 1);
+                this.board[toR][toC] = { t: type, o: this.turn };
+                
+                this.lastMove = { from: null, to: {r: toR, c: toC}, dropPiece: type };
+                this.changeTurn();
+                return true;
+            }
+
+            changeTurn() {
+                if(!this.isFinished) {
+                    this.turn = this.turn === 0 ? 1 : 0;
+                }
+            }
+
+            // 王手判定などの複雑な評価は今回ブラウザ動作のため簡略化（王が取られたら負けとする）
+        }
+
+        let game = new ShogiGame();
+        let appMode = null; // 'cpu' or 'online'
+        let cpuLevel = 1;
+        let myPlayerId = 0; // 0: 先手, 1: 後手。オンライン時はFirebaseで決定
+        
+        // 選択状態
+        let selectedCell = null; // {r, c}
+        let selectedHand = null; // {type, owner}
+        let currentMovableSquares = [];
+        
+        // Firebase関連
+        let app, db, auth, user;
+        let roomId = null;
+        let unsubscribeRoom = null;
+        let isMyTurnOnline = false;
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'shogi-app-default';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+
+        if (firebaseConfig) {
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+        }
+
+        // 初期化処理
+        async function init() {
+            if (auth) {
+                try {
+                    // 匿名ログイン必須
+                    const userCredential = await signInAnonymously(auth);
+                    user = userCredential.user;
+                } catch (e) {
+                    console.error("Auth error:", e);
+                }
+            }
+            renderBoard();
+        }
+
+        function renderBoard() {
+            const boardEl = document.getElementById('board');
+            boardEl.innerHTML = '';
+            
+            // 盤面描画
+            for (let r = 0; r < 9; r++) {
+                for (let c = 0; c < 9; c++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.dataset.r = r;
+                    cell.dataset.c = c;
+                    
+                    // ハイライト類
+                    if (selectedCell && selectedCell.r === r && selectedCell.c === c) {
+                        cell.classList.add('selected');
+                    }
+                    if (currentMovableSquares.some(sq => sq.r === r && sq.c === c)) {
+                        cell.classList.add('highlight');
+                    }
+                    if (game.lastMove && game.lastMove.to.r === r && game.lastMove.to.c === c) {
+                        cell.classList.add('last-move');
+                    }
+                    if (game.lastMove && game.lastMove.from && game.lastMove.from.r === r && game.lastMove.from.c === c) {
+                        cell.classList.add('last-move');
+                    }
+
+                    const piece = game.board[r][c];
+                    if (piece) {
+                        const pieceEl = document.createElement('div');
+                        pieceEl.className = `piece ${piece.o === 1 ? 'opponent' : ''} ${UNPROMOTED[piece.t] ? 'promoted' : ''}`;
+                        pieceEl.textContent = piece.t;
+                        cell.appendChild(pieceEl);
+                    }
+                    
+                    cell.onclick = () => handleCellClick(r, c);
+                    boardEl.appendChild(cell);
+                }
+            }
+
+            renderHands();
+            updateStatus();
+        }
+
+        function renderHands() {
+            const countPieces = (handArray) => {
+                const counts = {};
+                handArray.forEach(p => { counts[p] = (counts[p] || 0) + 1; });
+                return counts;
+            };
+
+            const renderHand = (ownerId, elementId) => {
+                const el = document.getElementById(elementId);
+                el.innerHTML = '';
+                const counts = countPieces(game.hands[ownerId]);
+                
+                // 定番の順番で表示
+                const order = ['飛', '角', '金', '銀', '桂', '香', '歩'];
+                
+                order.forEach(type => {
+                    if (counts[type]) {
+                        const pieceContainer = document.createElement('div');
+                        pieceContainer.className = 'relative';
+                        
+                        const pieceBtn = document.createElement('div');
+                        pieceBtn.className = `hand-piece ${ownerId === 1 ? 'opponent' : ''}`;
+                        if (selectedHand && selectedHand.owner === ownerId && selectedHand.type === type) {
+                            pieceBtn.classList.add('selected');
+                        }
+                        pieceBtn.textContent = type;
+                        
+                        if (counts[type] > 1) {
+                            const badge = document.createElement('div');
+                            badge.className = 'badge absolute -top-2 -right-2';
+                            badge.textContent = counts[type];
+                            pieceBtn.appendChild(badge);
+                        }
+
+                        pieceBtn.onclick = () => handleHandClick(type, ownerId);
+                        pieceContainer.appendChild(pieceBtn);
+                        el.appendChild(pieceContainer);
+                    }
+                });
+            };
+
+            renderHand(1, 'hand-1'); // 後手
+            renderHand(0, 'hand-0'); // 先手
+        }
+
+        function updateStatus() {
+            const turnEl = document.getElementById('turn-indicator');
+            const statusEl = document.getElementById('status-text');
+            
+            if (game.isFinished) {
+                let winnerStr = game.winner === 0 ? "先手" : "後手";
+                if(appMode === 'online') {
+                    winnerStr = game.winner === myPlayerId ? "あなた" : "相手";
+                } else if(appMode === 'cpu') {
+                    winnerStr = game.winner === 0 ? "あなた" : "CPU";
+                }
+                turnEl.textContent = "決着";
+                statusEl.textContent = `${winnerStr}の勝ちです！`;
+                showMsg(`${winnerStr}の勝ち！`, "ゲーム終了");
+                return;
+            }
+
+            if (appMode === 'cpu') {
+                if (game.turn === 0) {
+                    turnEl.textContent = "あなたの番";
+                    statusEl.textContent = "駒を選択して動かしてください";
+                } else {
+                    turnEl.textContent = "CPU思考中...";
+                    statusEl.textContent = "少しお待ちください...";
+                }
+            } else if (appMode === 'online') {
+                isMyTurnOnline = game.turn === myPlayerId;
+                if (isMyTurnOnline) {
+                    turnEl.textContent = "あなたの番";
+                    statusEl.textContent = "あなたの手番です";
+                } else {
+                    turnEl.textContent = "相手の番";
+                    statusEl.textContent = "相手の入力を待っています...";
+                }
+            }
+        }
+
+        function handleCellClick(r, c) {
+            if (game.isFinished) return;
+            
+            // 操作可能チェック
+            if (appMode === 'cpu' && game.turn !== 0) return;
+            if (appMode === 'online' && !isMyTurnOnline) return;
+
+            const isMovableSquare = currentMovableSquares.some(sq => sq.r === r && sq.c === c);
+
+            // 1. 持ち駒を選択して、空きマスに打つ場合
+            if (selectedHand && isMovableSquare) {
+                // 打つ
+                game.drop(selectedHand.type, r, c);
+                clearSelection();
+                afterPlayerMove();
+                return;
+            }
+
+            // 2. 盤上の駒を選択して、移動可能なマスをクリックした場合
+            if (selectedCell && isMovableSquare) {
+                const fr = selectedCell.r;
+                const fc = selectedCell.c;
+                const piece = game.board[fr][fc];
+                
+                // 成りの判定
+                const canPro = game.canPromote(piece.t, fr, r, game.turn);
+                const mustPro = game.mustPromote(piece.t, r, game.turn);
+
+                if (mustPro) {
+                    game.move(fr, fc, r, c, true);
+                    clearSelection();
+                    afterPlayerMove();
+                } else if (canPro) {
+                    // モーダル表示
+                    showPromotionModal((promote) => {
+                        game.move(fr, fc, r, c, promote);
+                        clearSelection();
+                        afterPlayerMove();
+                    });
+                } else {
+                    game.move(fr, fc, r, c, false);
+                    clearSelection();
+                    afterPlayerMove();
+                }
+                return;
+            }
+
+            // 3. 自分の駒をクリックした場合（選択）
+            const piece = game.board[r][c];
+            if (piece && piece.o === game.turn) {
+                selectedCell = {r, c};
+                selectedHand = null;
+                currentMovableSquares = game.getMovableSquares(r, c);
+                renderBoard();
+            } else {
+                // 関係ない場所をクリックしたら選択解除
+                clearSelection();
+                renderBoard();
+            }
+        }
+
+        function handleHandClick(type, ownerId) {
+            if (game.isFinished) return;
+            if (appMode === 'cpu' && game.turn !== 0) return;
+            if (appMode === 'online' && (!isMyTurnOnline || ownerId !== myPlayerId)) return;
+            if (appMode === 'cpu' && ownerId !== 0) return; // CPU戦は先手のみ
+
+            if (ownerId === game.turn) {
+                selectedHand = {type, owner: ownerId};
+                selectedCell = null;
+                currentMovableSquares = game.getDropSquares(type, ownerId);
+                renderBoard();
+            }
+        }
+
+        function clearSelection() {
+            selectedCell = null;
+            selectedHand = null;
+            currentMovableSquares = [];
+        }
+
+        function showPromotionModal(callback) {
+            const modal = document.getElementById('promotion-modal');
+            modal.classList.add('active');
+            
+            const btnPro = document.getElementById('btn-promote');
+            const btnUnpro = document.getElementById('btn-unpromote');
+            
+            // 一度イベントをクリアするためにクローン
+            const newPro = btnPro.cloneNode(true);
+            const newUnpro = btnUnpro.cloneNode(true);
+            btnPro.parentNode.replaceChild(newPro, btnPro);
+            btnUnpro.parentNode.replaceChild(newUnpro, btnUnpro);
+            
+            newPro.onclick = () => {
+                modal.classList.remove('active');
+                callback(true);
+            };
+            newUnpro.onclick = () => {
+                modal.classList.remove('active');
+                callback(false);
+            };
+        }
+
+        function afterPlayerMove() {
+            renderBoard();
+            if (appMode === 'cpu') {
+                if (!game.isFinished) {
+                    // CPUに手番を渡す（少し待つ）
+                    setTimeout(playCPU, 50); // UI更新のために少し遅延
+                }
+            } else if (appMode === 'online') {
+                syncToFirebase();
+            }
+        }
+
+        function playCPU() {
+            if (game.isFinished || game.turn !== 1) return;
+
+            // 簡易的なAI。レベルによって探索深さを変える。
+            // ブラウザのUIスレッドをブロックしないよう、本当はWebWorkerが良いが今回はsetTimeoutで簡易実装
+            let depth = 1; // 5級(ランダム/1手読み)
+            if (cpuLevel === 2) depth = 2; // 初段
+            else if (cpuLevel === 3) depth = 3; // 8段(ブラウザの限界付近。JavaScriptでは重い)
+
+            // UIが固まらないように非同期で処理するフリ
+            setTimeout(() => {
+                let bestMove = getBestMove(game, depth, 1);
+                
+                if (bestMove) {
+                    if (bestMove.type === 'move') {
+                        game.move(bestMove.from.r, bestMove.from.c, bestMove.to.r, bestMove.to.c, bestMove.promote);
+                    } else if (bestMove.type === 'drop') {
+                        game.drop(bestMove.piece, bestMove.to.r, bestMove.to.c);
+                    }
+                } else {
+                    // 指す手がない＝負け
+                    game.isFinished = true;
+                    game.winner = 0;
+                }
+                
+                renderBoard();
+            }, 100);
+        }
+
+        // 合法手の一覧を全て取得する（非常に重い処理）
+        function getAllLegalMoves(state, owner) {
+            let moves = [];
+            
+            // 1. 盤上の駒の移動
+            for (let r = 0; r < 9; r++) {
+                for (let c = 0; c < 9; c++) {
+                    const piece = state.board[r][c];
+                    if (piece && piece.o === owner) {
+                        const sqs = state.getMovableSquares(r, c);
+                        sqs.forEach(sq => {
+                            // 成れる場合は成る/成らないの両方を生成
+                            if (state.mustPromote(piece.t, sq.r, owner)) {
+                                moves.push({ type: 'move', from: {r, c}, to: sq, promote: true });
+                            } else if (state.canPromote(piece.t, r, sq.r, owner)) {
+                                moves.push({ type: 'move', from: {r, c}, to: sq, promote: true });
+                                moves.push({ type: 'move', from: {r, c}, to: sq, promote: false });
+                            } else {
+                                moves.push({ type: 'move', from: {r, c}, to: sq, promote: false });
+                            }
+                        });
+                    }
+                }
+            }
+
+            // 2. 持ち駒を打つ
+            const hand = state.hands[owner];
+            const uniqueHands = [...new Set(hand)];
+            uniqueHands.forEach(pieceType => {
+                const sqs = state.getDropSquares(pieceType, owner);
+                sqs.forEach(sq => {
+                    moves.push({ type: 'drop', piece: pieceType, to: sq });
+                });
+            });
+
+            return moves;
+        }
+
+        // 盤面の評価関数 (駒の価値の合計)
+        function evaluateBoard(state) {
+            let score = 0;
+            // 盤上
+            for (let r = 0; r < 9; r++) {
+                for (let c = 0; c < 9; c++) {
+                    const piece = state.board[r][c];
+                    if (piece) {
+                        const val = PIECE_VALUES[piece.t] || 0;
+                        // 後手(1)視点のスコアを正とするなら
+                        score += (piece.o === 1) ? val : -val;
+                        
+                        // ポジションボーナス（敵陣に入っていると少しプラスなど）簡易化
+                        if(piece.o === 1 && r >= 6) score += 10;
+                        if(piece.o === 0 && r <= 2) score -= 10;
+                    }
+                }
+            }
+            // 持ち駒
+            state.hands[1].forEach(p => score += (PIECE_VALUES[p] || 0) * 1.1); // 持ち駒は少し価値高め
+            state.hands[0].forEach(p => score -= (PIECE_VALUES[p] || 0) * 1.1);
+            
+            return score;
+        }
+
+        // Minimax法 (アルファ・ベータ探索)
+        function minimax(state, depth, alpha, beta, isMaximizing) {
+            if (depth === 0 || state.isFinished) {
+                return evaluateBoard(state);
+            }
+
+            const owner = isMaximizing ? 1 : 0;
+            const moves = getAllLegalMoves(state, owner);
+            
+            // 手がない場合（詰み）
+            if (moves.length === 0) {
+                return isMaximizing ? -999999 : 999999;
+            }
+
+            if (isMaximizing) {
+                let maxEval = -Infinity;
+                for (let move of moves) {
+                    // 状態のコピーを作成（コスト高いが確実）
+                    let nextState = new ShogiGame();
+                    nextState.loadState(JSON.parse(JSON.stringify(state.exportState())));
+                    
+                    // 手を進める
+                    if (move.type === 'move') nextState.move(move.from.r, move.from.c, move.to.r, move.to.c, move.promote);
+                    else nextState.drop(move.piece, move.to.r, move.to.c);
+
+                    let ev = minimax(nextState, depth - 1, alpha, beta, false);
+                    maxEval = Math.max(maxEval, ev);
+                    alpha = Math.max(alpha, ev);
+                    if (beta <= alpha) break; // βカット
+                }
+                return maxEval;
+            } else {
+                let minEval = Infinity;
+                for (let move of moves) {
+                    let nextState = new ShogiGame();
+                    nextState.loadState(JSON.parse(JSON.stringify(state.exportState())));
+                    
+                    if (move.type === 'move') nextState.move(move.from.r, move.from.c, move.to.r, move.to.c, move.promote);
+                    else nextState.drop(move.piece, move.to.r, move.to.c);
+
+                    let ev = minimax(nextState, depth - 1, alpha, beta, true);
+                    minEval = Math.min(minEval, ev);
+                    beta = Math.min(beta, ev);
+                    if (beta <= alpha) break; // αカット
+                }
+                return minEval;
+            }
+        }
+
+        function getBestMove(state, depth, owner) {
+            const moves = getAllLegalMoves(state, owner);
+            if (moves.length === 0) return null;
+
+            // ランダム要素を追加 (5級用、または同じ評価値の場合のブレ)
+            // 配列をシャッフル
+            moves.sort(() => Math.random() - 0.5);
+
+            if (depth <= 1) {
+                // 1手読み(5級): 単純に次の盤面評価が一番高い手を選ぶ。あるいは完全にランダム。
+                if (cpuLevel === 1) {
+                    // 20%の確率で完全ランダムの手を指す(弱い)
+                    if(Math.random() < 0.2) return moves[0];
+                }
+                
+                let bestVal = -Infinity;
+                let bestMove = moves[0];
+                for(let m of moves) {
+                    let nextState = new ShogiGame();
+                    nextState.loadState(JSON.parse(JSON.stringify(state.exportState())));
+                    if (m.type === 'move') nextState.move(m.from.r, m.from.c, m.to.r, m.to.c, m.promote);
+                    else nextState.drop(m.piece, m.to.r, m.to.c);
+                    
+                    let val = evaluateBoard(nextState);
+                    if(val > bestVal) {
+                        bestVal = val;
+                        bestMove = m;
+                    }
+                }
+                return bestMove;
+            }
+
+            // 深い探索
+            let bestMove = null;
+            let bestValue = -Infinity;
+            let alpha = -Infinity;
+            let beta = Infinity;
+
+            for (let move of moves) {
+                let nextState = new ShogiGame();
+                nextState.loadState(JSON.parse(JSON.stringify(state.exportState())));
+                if (move.type === 'move') nextState.move(move.from.r, move.from.c, move.to.r, move.to.c, move.promote);
+                else nextState.drop(move.piece, move.to.r, move.to.c);
+
+                let boardValue = minimax(nextState, depth - 1, alpha, beta, false);
+                if (boardValue > bestValue) {
+                    bestValue = boardValue;
+                    bestMove = move;
+                }
+                alpha = Math.max(alpha, bestValue);
+            }
+
+            return bestMove;
+        }
+
+        async function createRoom() {
+            if (!user) { showMsg("通信準備中", "少し待ってから再試行してください。"); return; }
+            
+            // ランダムな4文字のIDを生成
+            const newRoomId = Math.random().toString(36).substring(2, 6).toUpperCase();
+            roomId = newRoomId;
+            myPlayerId = 0; // 作成者は先手
+
+            game.reset();
+            const initialState = game.exportState();
+            
+            try {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'shogi_rooms', roomId);
+                await setDoc(docRef, {
+                    state: initialState,
+                    player0: user.uid,
+                    player1: null,
+                    status: 'waiting',
+                    timestamp: new Date()
+                });
+                
+                startGame('online', null);
+                document.getElementById('room-info').classList.remove('hidden');
+                document.getElementById('display-room-id').textContent = roomId;
+                document.getElementById('room-status-msg').textContent = "相手の参加を待っています...";
+                
+                listenRoom();
+            } catch (e) {
+                console.error("Room creation error", e);
+                showMsg("エラー", "部屋の作成に失敗しました。");
+            }
+        }
+
+        async function joinRoom() {
+            if (!user) return;
+            const inputId = document.getElementById('join-room-id').value.toUpperCase().trim();
+            if (!inputId) { showMsg("エラー", "部屋IDを入力してください。"); return; }
+            
+            try {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'shogi_rooms', inputId);
+                const docSnap = await getDoc(docRef);
+                
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    if (data.status === 'waiting') {
+                        // 参加成功
+                        roomId = inputId;
+                        myPlayerId = 1; // 参加者は後手
+                        
+                        await updateDoc(docRef, {
+                            player1: user.uid,
+                            status: 'playing'
+                        });
+                        
+                        game.loadState(data.state);
+                        startGame('online', null);
+                        document.getElementById('room-info').classList.remove('hidden');
+                        document.getElementById('display-room-id').textContent = roomId;
+                        document.getElementById('room-status-msg').textContent = "対戦中 (あなたは後手です)";
+                        document.getElementById('room-status-msg').classList.replace('text-blue-600', 'text-green-600');
+                        
+                        listenRoom();
+                    } else {
+                        showMsg("エラー", "この部屋は既に対戦中か終了しています。");
+                    }
+                } else {
+                    showMsg("エラー", "部屋が見つかりません。IDを確認してください。");
+                }
+            } catch (e) {
+                console.error("Join error", e);
+                showMsg("エラー", "部屋への参加に失敗しました。");
+            }
+        }
+
+        function listenRoom() {
+            if (!roomId || !db) return;
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'shogi_rooms', roomId);
+            
+            unsubscribeRoom = onSnapshot(docRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    
+                    if (data.status === 'playing' && document.getElementById('room-status-msg').textContent.includes("待って")) {
+                        document.getElementById('room-status-msg').textContent = "対戦開始！ (あなたは先手です)";
+                        document.getElementById('room-status-msg').classList.replace('text-blue-600', 'text-green-600');
+                        showMsg("マッチング完了", "相手が参加しました！あなたの番から始まります。");
+                    }
+
+                    // 相手の手番後の状態を反映 (自分が動かした直後以外)
+                    if (data.state && data.state.turn === myPlayerId) {
+                         game.loadState(data.state);
+                         clearSelection();
+                         renderBoard();
+                    }
+                }
+            }, (error) => {
+                console.error("Listen error", error);
+            });
+        }
+
+        async function syncToFirebase() {
+            if (!roomId || !db || appMode !== 'online') return;
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'shogi_rooms', roomId);
+            try {
+                await updateDoc(docRef, {
+                    state: game.exportState()
+                });
+            } catch (e) {
+                console.error("Sync error", e);
+            }
+        }
+
+        window.startGame = function(mode, level) {
+            appMode = mode;
+            document.getElementById('menu-screen').classList.add('hidden');
+            document.getElementById('game-screen').classList.replace('hidden', 'flex');
+            
+            if (mode === 'cpu') {
+                cpuLevel = level;
+                myPlayerId = 0; // CPU戦は常に先手
+                game.reset();
+                document.getElementById('room-info').classList.add('hidden');
+                renderBoard();
+            }
+        };
+
+        window.resetToMenu = function() {
+            if (unsubscribeRoom) {
+                unsubscribeRoom();
+                unsubscribeRoom = null;
+            }
+            appMode = null;
+            roomId = null;
+            document.getElementById('menu-screen').classList.remove('hidden');
+            document.getElementById('game-screen').classList.replace('flex', 'hidden');
+            document.getElementById('status-text').textContent = "モードを選択してください";
+        };
+
+        window.copyRoomId = function() {
+            const id = document.getElementById('display-room-id').textContent;
+            if(id) {
+                // クリップボードAPIが使えないiframe環境への対応
+                try {
+                    const el = document.createElement('textarea');
+                    el.value = id;
+                    document.body.appendChild(el);
+                    el.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(el);
+                    alert("部屋IDをコピーしました: " + id);
+                } catch(e) {
+                    console.log("Copy failed");
+                }
+            }
+        };
+
+        window.showMsg = function(title, content) {
+            document.getElementById('msg-title').textContent = title;
+            document.getElementById('msg-content').textContent = content;
+            document.getElementById('msg-modal').classList.replace('hidden', 'flex');
+        };
+
+        window.closeMsgModal = function() {
+            document.getElementById('msg-modal').classList.replace('flex', 'hidden');
+        };
+
+        // アプリ起動
+        window.onload = init;
+
+    </script>
+</body>
+</html>
